@@ -1,0 +1,19 @@
+[package]
+name = "billcraft-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core business logic, event bus workflows, and dispatch for BillCraft"
+
+[dependencies]
+billcraft-store = { path = "../billcraft-store" }
+craft-biz = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
