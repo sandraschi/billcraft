@@ -1,0 +1,5 @@
+# BillCraft
+
+> Local-first sovereign invoicing, subscription recurring billing, and European e-invoicing engine in pure Rust.
+
+- [Full LLM Reference](llms-full.txt): Comprehensive tools, architecture, and configuration documentation.

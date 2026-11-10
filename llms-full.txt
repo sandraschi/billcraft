@@ -1,0 +1,32 @@
+# BillCraft — Full Technical & LLM Reference
+
+## Architecture Overview
+
+BillCraft is a local-first enterprise invoicing and recurring billing engine built in pure Rust. It enforces `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` across all crates:
+
+- `billcraft-store`: SQLite transaction layer with foreign key cascades and integer money handling (`Money(i64 cents)`).
+- `billcraft-core`: Austrian ebInterface 6.1 generator, ISO 20022 SEPA Direct Debit (`pain.008`) XML batch builder, subscription scheduler, and event bus handlers.
+- `billcraft-mcp`: Stdio JSON-RPC FastMCP server & CLI binary (`billcraft`).
+- `billcraft-app`: Native desktop GUI executable (`billcraft-app`) via `egui 0.37`.
+
+## MCP Tools Reference
+
+1. `bill_status`: Retrieves high-level billing metrics (total drafted, issued, paid, overdue invoices, and active subscriptions).
+2. `bill_customer_add`: Registers a new customer with UID (ATU), IBAN/BIC, and address.
+3. `bill_customer_list`: Lists all registered billing accounts.
+4. `bill_invoice_draft`: Creates a new invoice with itemized line items, tax rates, and due dates.
+5. `bill_invoice_issue`: Transitions an invoice from Draft to Issued, generating payment tracking numbers and emitting `invoice.issued`.
+6. `bill_invoice_show`: Fetches full details of a specific invoice including line items and payment state.
+7. `bill_ebinterface_export`: Exports a compliant Austrian ebInterface 6.1 XML document.
+8. `bill_sepa_direct_debit_batch`: Generates ISO 20022 `pain.008.001.02` batch XML for all pending issued invoices.
+
+## Configuration & Environment Variables
+
+- `BILLCRAFT_DB`: Path to SQLite database file (default: `%LOCALAPPDATA%\billcraft\billcraft.db`).
+- `CRAFT_BUS_DIR`: Root directory of atomic event bus (default: `%LOCALAPPDATA%\craft-biz-bus`).
+
+## Event Bus Protocol
+
+- Inbox: `%LOCALAPPDATA%\craft-biz-bus\billcraft\inbox\`
+  - Handled events: `contract.signed` (triggers recurring subscription profile), `timesheet.approved` (appends billable hours line items).
+- Outbox emissions: `invoice.issued`, `invoice.paid`, `invoice.overdue`.
