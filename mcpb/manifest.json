@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.2",
+  "name": "billcraft",
+  "display_name": "BillCraft",
+  "version": "__VERSION__",
+  "description": "Native egui desktop application for BillCraft",
+  "author": {
+    "name": "Sandra Schipal",
+    "url": "https://github.com/sandraschi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sandraschi/billcraft"
+  },
+  "license": "MIT OR Apache-2.0",
+  "server": {
+    "type": "binary",
+    "entry_point": "billcraft.exe",
+    "mcp_config": {
+      "command": "${__dirname}/billcraft.exe",
+      "args": [
+        "mcp"
+      ]
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ]
+  },
+  "tools": [
+    {
+      "name": "bill_stats",
+      "description": "Get billing totals and MRR"
+    },
+    {
+      "name": "invoice_list",
+      "description": "List invoices by status"
+    },
+    {
+      "name": "invoice_get",
+      "description": "Get invoice details"
+    }
+  ]
+}
