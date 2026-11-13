@@ -12,7 +12,8 @@ Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dep
 ## Features
 
 - **Austrian ebInterface 6.1**: Full compliance with Austrian federal e-invoicing standards (`ebInterface:Invoice` XML).
-- **XRechnung 3.0.2**: UBL invoice from stored seller and buyer parties (`billcraft party`, then `billcraft export-xrechnung`). The fixture is accepted by KoSIT Validator 1.6.3 with the configuration of 31 August 2026. This is not a Peppol delivery.
+- **XRechnung 3.0.2**: UBL invoice from stored seller and buyer parties (`billcraft party`, then `billcraft export-xrechnung`). The fixture is accepted by KoSIT Validator 1.6.3 with the configuration of 31 August 2026. EndpointID is the participant id.
+- **Peppol send**: `billcraft peppol-send <id>` builds the SBDH and posts one AS4 message when `BILLCRAFT_AP_CERT`, `BILLCRAFT_AP_KEY`, and `BILLCRAFT_SMP_URL` are set. A receipt marks it accepted. Without those three, the package is prepared and not sent. BillCraft is not an access point. See `PEPPOL.md` in mcp-central-docs.
 - **ISO 20022 SEPA Direct Debit (`pain.008.001.02`)**: Automated direct debit batch XML generation with Austrian creditor identifiers.
 - **Subscription Engine**: Automated monthly and annual recurring invoice generation.
 - **Event Bus Integration**: Drains `contract.signed` from `contractcraft` and `timesheet.approved` from `teamcraft`; emits `invoice.issued`, `invoice.paid`, and `invoice.overdue`.

@@ -86,8 +86,18 @@ enum Commands {
         iban: Option<String>,
         #[arg(long)]
         buyer_reference: Option<String>,
+        /// ISO 6523 scheme, for example 9930.
+        #[arg(long)]
+        peppol_scheme: Option<String>,
+        /// Peppol participant id. Not the email address.
+        #[arg(long)]
+        peppol_id: Option<String>,
     },
     ExportXrechnung {
+        id: String,
+    },
+    /// Prepare a Peppol package and send it when the access-point env is set.
+    PeppolSend {
         id: String,
     },
     ExportSepa {
@@ -111,6 +121,8 @@ enum Commands {
     SubList,
     Stats,
     InboxDrain,
+    /// Fill an empty file with labelled Northwind Traders sample invoices.
+    DemoSeed,
     Tools,
     Mcp,
 }
@@ -287,6 +299,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone,
             iban,
             buyer_reference,
+            peppol_scheme,
+            peppol_id,
         } => {
             service.store().save_xrechnung_party(
                 &id,
@@ -301,6 +315,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     phone,
                     iban,
                     buyer_reference,
+                    peppol_scheme,
+                    peppol_id,
                 },
             )?;
             println!("Stored XRechnung party {id}");
@@ -308,6 +324,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::ExportXrechnung { id } => {
             let xml = service.store().export_xrechnung(&id)?;
             println!("{xml}");
+        }
+        Commands::PeppolSend { id } => {
+            let out = service.peppol_send(&id)?;
+            println!("{} {}", out.status, out.message_id);
+            println!("{}", out.detail);
         }
         Commands::ExportSepa {
             invoice_ids,
@@ -372,6 +393,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Drained {} events from inbox. Invoices created: {:?}",
                 res.processed, res.created_invoices
             );
+        }
+        Commands::DemoSeed => {
+            let n = service.store().seed_northwind_demo()?;
+            println!("Loaded {n} labelled Northwind Traders demo invoices.");
         }
         Commands::Tools => {
             print_tools_catalog();

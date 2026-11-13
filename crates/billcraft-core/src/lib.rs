@@ -3,9 +3,11 @@
 #![deny(clippy::panic)]
 
 pub use billcraft_store::*;
+mod peppol;
 use chrono::Local;
 use craft_biz::bus::Bus;
 use craft_biz::BizError;
+pub use peppol::{PeppolOutcome, PeppolTransport, SigningMaterial};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -106,6 +108,21 @@ impl BillService {
         }
 
         Ok(updated)
+    }
+
+    /// Prepares the Peppol package and sends it when the access-point env is set.
+    /// A missing certificate, key, or SMP URL leaves the row at `prepared`.
+    pub fn peppol_send(&self, invoice_id: &str) -> Result<PeppolOutcome, BillCoreError> {
+        peppol::send_live(&self.store, invoice_id)
+    }
+
+    pub fn peppol_send_with<T: PeppolTransport>(
+        &self,
+        invoice_id: &str,
+        transport: &T,
+        material: &SigningMaterial,
+    ) -> Result<PeppolOutcome, BillCoreError> {
+        peppol::send_with(&self.store, invoice_id, transport, material)
     }
 
     /// Drains `contract.signed` and `timesheet.approved` into draft invoices.

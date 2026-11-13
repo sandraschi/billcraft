@@ -14,6 +14,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+flate2 = "1"
+sha2 = "0.10"
+base64 = "0.22"
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+ureq = "2.12"
+
+[dev-dependencies]
+rand = "0.8"
 
 [lints]
 workspace = true

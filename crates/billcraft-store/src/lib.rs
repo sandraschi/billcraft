@@ -175,7 +175,21 @@ impl BillStore {
                 vat_id TEXT,
                 phone TEXT,
                 iban TEXT,
-                buyer_reference TEXT
+                buyer_reference TEXT,
+                peppol_scheme TEXT,
+                peppol_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS peppol_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                package TEXT NOT NULL,
+                status TEXT NOT NULL,
+                endpoint_url TEXT,
+                receipt TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -188,6 +202,23 @@ impl BillStore {
                 status TEXT NOT NULL
             );",
         )?;
+        self.ensure_column("xrechnung_party", "peppol_scheme")?;
+        self.ensure_column("xrechnung_party", "peppol_id")?;
+        Ok(())
+    }
+
+    fn ensure_column(&self, table: &str, column: &str) -> Result<(), BillStoreError> {
+        let pragma = format!("PRAGMA table_info({table})");
+        let mut stmt = self.conn.prepare(&pragma)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(());
+            }
+        }
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} TEXT");
+        self.conn.execute(&sql, [])?;
         Ok(())
     }
 
@@ -803,8 +834,9 @@ impl BillStore {
         }
         self.conn.execute(
             "INSERT INTO xrechnung_party (
-                id, name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                id, name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference,
+                peppol_scheme, peppol_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 street = excluded.street,
@@ -815,7 +847,9 @@ impl BillStore {
                 vat_id = excluded.vat_id,
                 phone = excluded.phone,
                 iban = excluded.iban,
-                buyer_reference = excluded.buyer_reference",
+                buyer_reference = excluded.buyer_reference,
+                peppol_scheme = excluded.peppol_scheme,
+                peppol_id = excluded.peppol_id",
             params![
                 id,
                 party.name,
@@ -827,15 +861,18 @@ impl BillStore {
                 party.vat_id,
                 party.phone,
                 party.iban,
-                party.buyer_reference
+                party.buyer_reference,
+                party.peppol_scheme,
+                party.peppol_id
             ],
         )?;
         Ok(())
     }
 
-    fn xrechnung_party(&self, id: &str) -> Result<XrParty, BillStoreError> {
+    pub fn get_xrechnung_party(&self, id: &str) -> Result<Option<XrParty>, BillStoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference
+            "SELECT name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference,
+                    peppol_scheme, peppol_id
              FROM xrechnung_party WHERE id = ?1",
         )?;
         let party = stmt
@@ -851,18 +888,22 @@ impl BillStore {
                     phone: row.get(7)?,
                     iban: row.get(8)?,
                     buyer_reference: row.get(9)?,
+                    peppol_scheme: row.get(10)?,
+                    peppol_id: row.get(11)?,
                 })
             })
-            .optional()?
-            .ok_or_else(|| {
-                BillStoreError::Validation(format!("XRechnung party {id} is missing"))
-            })?;
+            .optional()?;
         Ok(party)
+    }
+
+    fn xrechnung_party(&self, id: &str) -> Result<XrParty, BillStoreError> {
+        self.get_xrechnung_party(id)?
+            .ok_or_else(|| BillStoreError::Validation(format!("XRechnung party {id} is missing")))
     }
 
     /// UBL 2.1 invoice for XRechnung 3.0.2.
     /// Seller is party id `seller`. Buyer is party id equal to the invoice id.
-    /// A missing party is an error. This is not a Peppol transmission.
+    /// EndpointID is the Peppol participant, not the email address.
     pub fn export_xrechnung(&self, invoice_id: &str) -> Result<String, BillStoreError> {
         let inv = self.get_invoice(invoice_id)?;
         let items = self.get_items(invoice_id)?;
@@ -887,6 +928,8 @@ impl BillStore {
         let buyer_ref = buyer.buyer_reference.as_deref().ok_or_else(|| {
             BillStoreError::Validation("XRechnung buyer needs a buyer reference".into())
         })?;
+        let (seller_scheme, seller_endpoint) = require_participant(&seller, "seller")?;
+        let (buyer_scheme, buyer_endpoint) = require_participant(&buyer, "buyer")?;
         let currency = &inv.currency;
         let mut xml = String::new();
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -926,8 +969,18 @@ impl BillStore {
             true,
             seller_vat,
             seller_phone,
+            &seller_scheme,
+            &seller_endpoint,
         ));
-        xml.push_str(&party_xml("AccountingCustomerParty", &buyer, false, "", ""));
+        xml.push_str(&party_xml(
+            "AccountingCustomerParty",
+            &buyer,
+            false,
+            "",
+            "",
+            &buyer_scheme,
+            &buyer_endpoint,
+        ));
         xml.push_str("  <cac:PaymentMeans>\n");
         xml.push_str("    <cbc:PaymentMeansCode>58</cbc:PaymentMeansCode>\n");
         xml.push_str("    <cac:PayeeFinancialAccount>\n");
@@ -972,6 +1025,211 @@ impl BillStore {
         xml.push_str("</ubl:Invoice>\n");
         Ok(xml)
     }
+
+    /// Labelled Northwind Traders sample invoices. Refuses a file that already has invoices.
+    pub fn seed_northwind_demo(&self) -> Result<usize, BillStoreError> {
+        if !self.list_invoices(None)?.is_empty() {
+            return Err(BillStoreError::Validation(
+                "Northwind demo loads only into an empty invoice file".into(),
+            ));
+        }
+        let day = |y, m, d| {
+            NaiveDate::from_ymd_opt(y, m, d)
+                .ok_or_else(|| BillStoreError::Validation("bad demo date".into()))
+        };
+        let note = Some("DEMO. Northwind Traders sample. Not a real customer.");
+        self.save_xrechnung_party(
+            "seller",
+            &XrParty {
+                name: "Northwind Traders".into(),
+                street: "Obere Bahngasse 1".into(),
+                city: "Wien".into(),
+                postcode: "1010".into(),
+                country: "AT".into(),
+                email: "demo@northwind.example".into(),
+                vat_id: Some("ATU00000000".into()),
+                phone: Some("+431000000".into()),
+                iban: Some("AT611904300234573201".into()),
+                buyer_reference: None,
+                peppol_scheme: Some("9930".into()),
+                peppol_id: Some("DEMO-ATU00000000".into()),
+            },
+        )?;
+        self.create_invoice(
+            "NW-10248",
+            "VINET",
+            "Vins et alcools Chevalier",
+            "vinet@demo.northwind.example",
+            None,
+            Some("FR1420041010050500013M02606"),
+            Some("PSSTFRPP"),
+            day(2026, 7, 4)?,
+            day(2026, 7, 18)?,
+            note,
+        )?;
+        self.add_item("NW-10248", "Chai", 12.0, 1800, 0.20)?;
+        self.add_item("NW-10248", "Chang", 10.0, 1900, 0.20)?;
+        self.update_status("NW-10248", InvoiceStatus::Paid)?;
+        self.save_xrechnung_party(
+            "NW-10248",
+            &XrParty {
+                name: "Vins et alcools Chevalier".into(),
+                street: "59 rue de l'Abbaye".into(),
+                city: "Reims".into(),
+                postcode: "51100".into(),
+                country: "FR".into(),
+                email: "vinet@demo.northwind.example".into(),
+                vat_id: None,
+                phone: None,
+                iban: Some("FR1420041010050500013M02606".into()),
+                buyer_reference: Some("NW-VINET".into()),
+                peppol_scheme: Some("9930".into()),
+                peppol_id: Some("DEMO-VINET".into()),
+            },
+        )?;
+
+        self.create_invoice(
+            "NW-10249",
+            "TOMSP",
+            "Toms Spezialitaeten",
+            "toms@demo.northwind.example",
+            None,
+            None,
+            None,
+            day(2026, 7, 5)?,
+            day(2026, 7, 19)?,
+            note,
+        )?;
+        self.add_item("NW-10249", "Aniseed Syrup", 10.0, 1000, 0.20)?;
+        self.add_item("NW-10249", "Chef Anton's Cajun Seasoning", 5.0, 2200, 0.20)?;
+        self.update_status("NW-10249", InvoiceStatus::Issued)?;
+
+        self.create_invoice(
+            "NW-10250",
+            "HANAR",
+            "Hanari Carnes",
+            "hanari@demo.northwind.example",
+            None,
+            None,
+            None,
+            day(2026, 6, 1)?,
+            day(2026, 6, 15)?,
+            note,
+        )?;
+        self.add_item("NW-10250", "Queso Cabrales", 15.0, 2100, 0.20)?;
+        self.update_status("NW-10250", InvoiceStatus::Overdue)?;
+
+        self.create_invoice(
+            "NW-10251",
+            "ERNSH",
+            "Ernst Handel",
+            "ernst@demo.northwind.example",
+            Some("ATU00000001"),
+            Some("AT483200000012345864"),
+            Some("RLNWATWW"),
+            day(2026, 8, 8)?,
+            day(2026, 8, 22)?,
+            note,
+        )?;
+        self.add_item("NW-10251", "Ikura", 6.0, 3100, 0.20)?;
+        self.add_item("NW-10251", "Grandma's Boysenberry Spread", 8.0, 2500, 0.20)?;
+
+        self.create_invoice(
+            "NW-10252",
+            "VICTE",
+            "Victuailles en stock",
+            "victuailles@demo.northwind.example",
+            None,
+            None,
+            None,
+            day(2026, 8, 9)?,
+            day(2026, 8, 23)?,
+            note,
+        )?;
+        self.add_item(
+            "NW-10252",
+            "Uncle Bob's Organic Dried Pears",
+            4.0,
+            3000,
+            0.20,
+        )?;
+        self.update_status("NW-10252", InvoiceStatus::Issued)?;
+        Ok(5)
+    }
+
+    /// Wraps the XRechnung in an SBDH and stores a `prepared` outbox row.
+    /// A draft, a zero total, or a missing participant id is refused.
+    pub fn peppol_prepare(&self, invoice_id: &str) -> Result<PeppolOutbox, BillStoreError> {
+        let inv = self.get_invoice(invoice_id)?;
+        if inv.status == InvoiceStatus::Draft {
+            return Err(BillStoreError::Validation(
+                "Peppol send needs an issued invoice".into(),
+            ));
+        }
+        if inv.gross_cents == 0 {
+            return Err(BillStoreError::Validation(
+                "Peppol send needs a positive total".into(),
+            ));
+        }
+        let seller = self.xrechnung_party("seller")?;
+        let buyer = self.xrechnung_party(invoice_id)?;
+        let (seller_scheme, seller_id) = require_participant(&seller, "seller")?;
+        let (buyer_scheme, buyer_id) = require_participant(&buyer, "buyer")?;
+        let ubl = self.export_xrechnung(invoice_id)?;
+        let message_id = peppol_message_id(invoice_id);
+        let package = wrap_sbdh(
+            &ubl,
+            &message_id,
+            &format!("{seller_scheme}:{seller_id}"),
+            &format!("{buyer_scheme}:{buyer_id}"),
+        );
+        let created = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO peppol_outbox (invoice_id, message_id, package, status, endpoint_url, receipt, error, created_at)
+             VALUES (?1, ?2, ?3, 'prepared', NULL, NULL, NULL, ?4)",
+            params![invoice_id, message_id, package, created],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.peppol_outbox(id)
+    }
+
+    pub fn peppol_outbox(&self, id: i64) -> Result<PeppolOutbox, BillStoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, invoice_id, message_id, package, status, endpoint_url, receipt, error
+                 FROM peppol_outbox WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(PeppolOutbox {
+                        id: row.get(0)?,
+                        invoice_id: row.get(1)?,
+                        message_id: row.get(2)?,
+                        package: row.get(3)?,
+                        status: row.get(4)?,
+                        endpoint_url: row.get(5)?,
+                        receipt: row.get(6)?,
+                        error: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| BillStoreError::NotFound(format!("peppol outbox {id}")))
+    }
+
+    pub fn update_peppol_outbox(
+        &self,
+        id: i64,
+        status: &str,
+        endpoint_url: Option<&str>,
+        receipt: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<PeppolOutbox, BillStoreError> {
+        self.conn.execute(
+            "UPDATE peppol_outbox SET status = ?1, endpoint_url = ?2, receipt = ?3, error = ?4 WHERE id = ?5",
+            params![status, endpoint_url, receipt, error, id],
+        )?;
+        self.peppol_outbox(id)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -986,6 +1244,98 @@ pub struct XrParty {
     pub phone: Option<String>,
     pub iban: Option<String>,
     pub buyer_reference: Option<String>,
+    /// ISO 6523 scheme, for example `9930` or `0204`.
+    pub peppol_scheme: Option<String>,
+    pub peppol_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeppolOutbox {
+    pub id: i64,
+    pub invoice_id: String,
+    pub message_id: String,
+    pub package: String,
+    pub status: String,
+    pub endpoint_url: Option<String>,
+    pub receipt: Option<String>,
+    pub error: Option<String>,
+}
+
+fn require_participant(party: &XrParty, who: &str) -> Result<(String, String), BillStoreError> {
+    let scheme = party
+        .peppol_scheme
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let id = party
+        .peppol_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let (Some(scheme), Some(id)) = (scheme, id) else {
+        return Err(BillStoreError::Validation(format!(
+            "{who} needs a Peppol scheme and participant id"
+        )));
+    };
+    if !scheme.chars().all(|c| c.is_ascii_digit()) || !(1..=4).contains(&scheme.len()) {
+        return Err(BillStoreError::Validation(format!(
+            "{who} Peppol scheme is a 1-4 digit ISO 6523 code"
+        )));
+    }
+    if id.len() > 64 || id.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(BillStoreError::Validation(format!(
+            "{who} Peppol id must be 1-64 characters without spaces"
+        )));
+    }
+    Ok((scheme.to_string(), id.to_string()))
+}
+
+fn peppol_message_id(invoice_id: &str) -> String {
+    let safe: String = invoice_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    format!("billcraft-{safe}-{}@local", Utc::now().timestamp_millis())
+}
+
+fn wrap_sbdh(ubl: &str, message_id: &str, sender: &str, receiver: &str) -> String {
+    let body = strip_xml_decl(ubl);
+    let created = Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<StandardBusinessDocument xmlns=\"http://www.unece.org/cefact/namespaces/StandardBusinessDocumentHeader\">\n\
+  <StandardBusinessDocumentHeader>\n\
+    <HeaderVersion>1.0</HeaderVersion>\n\
+    <Sender><Identifier Authority=\"iso6523-actorid-upis\">{sender}</Identifier></Sender>\n\
+    <Receiver><Identifier Authority=\"iso6523-actorid-upis\">{receiver}</Identifier></Receiver>\n\
+    <DocumentIdentification>\n\
+      <Standard>urn:oasis:names:specification:ubl:schema:xsd:Invoice-2</Standard>\n\
+      <TypeVersion>2.1</TypeVersion>\n\
+      <InstanceIdentifier>{message_id}</InstanceIdentifier>\n\
+      <Type>Invoice</Type>\n\
+      <CreationDateAndTime>{created}</CreationDateAndTime>\n\
+    </DocumentIdentification>\n\
+    <BusinessScope>\n\
+      <Scope><Type>DOCUMENTID</Type><InstanceIdentifier>urn:oasis:names:specification:ubl:schema:xsd:Invoice-2</InstanceIdentifier></Scope>\n\
+      <Scope><Type>PROCESSID</Type><InstanceIdentifier>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</InstanceIdentifier></Scope>\n\
+    </BusinessScope>\n\
+  </StandardBusinessDocumentHeader>\n\
+{body}\n\
+</StandardBusinessDocument>\n",
+        sender = xml_escape(sender),
+        receiver = xml_escape(receiver),
+        message_id = xml_escape(message_id),
+    )
+}
+
+fn strip_xml_decl(xml: &str) -> &str {
+    let trimmed = xml.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("<?xml") {
+        if let Some(end) = rest.find('>') {
+            return rest[end + 1..].trim_start();
+        }
+    }
+    trimmed
 }
 
 fn money(cents: i64) -> String {
@@ -1017,11 +1367,19 @@ fn xml_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn party_xml(tag: &str, party: &XrParty, seller: bool, vat_id: &str, phone: &str) -> String {
+fn party_xml(
+    tag: &str,
+    party: &XrParty,
+    seller: bool,
+    vat_id: &str,
+    phone: &str,
+    scheme: &str,
+    endpoint_id: &str,
+) -> String {
     let mut xml = format!("  <cac:{tag}>\n    <cac:Party>\n");
     xml.push_str(&format!(
-        "      <cbc:EndpointID schemeID=\"EM\">{}</cbc:EndpointID>\n",
-        xml_escape(&party.email)
+        "      <cbc:EndpointID schemeID=\"{scheme}\">{}</cbc:EndpointID>\n",
+        xml_escape(endpoint_id)
     ));
     xml.push_str("      <cac:PostalAddress>\n");
     xml.push_str(&format!(
@@ -1208,6 +1566,8 @@ mod tests {
                     phone: Some("+49 1234-5678".into()),
                     iban: Some("DE79000000001234567890".into()),
                     buyer_reference: None,
+                    peppol_scheme: Some("9930".into()),
+                    peppol_id: Some("DE123456789".into()),
                 },
             )
             .unwrap();
@@ -1225,6 +1585,8 @@ mod tests {
                     phone: None,
                     iban: None,
                     buyer_reference: Some("04011000-12345-03".into()),
+                    peppol_scheme: Some("0204".into()),
+                    peppol_id: Some("04011000-12345-03".into()),
                 },
             )
             .unwrap();
@@ -1276,5 +1638,102 @@ mod tests {
             output.status.success() && text.contains("Validation successful"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn northwind_demo_fills_an_empty_file_once() -> Result<(), String> {
+        let store = BillStore::open_in_memory().map_err(|e| e.to_string())?;
+        let n = store.seed_northwind_demo().map_err(|e| e.to_string())?;
+        if n != 5 {
+            return Err(format!("expected 5 invoices, got {n}"));
+        }
+        if store.seed_northwind_demo().is_ok() {
+            return Err("a second demo load should fail".into());
+        }
+        let ernst = store.get_invoice("NW-10251").map_err(|e| e.to_string())?;
+        if ernst.customer_name != "Ernst Handel" || ernst.status != InvoiceStatus::Draft {
+            return Err("Ernst Handel draft missing".into());
+        }
+        let note = ernst.notes.unwrap_or_default();
+        if !note.contains("DEMO") {
+            return Err("demo note missing".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn peppol_prepare_wraps_an_issued_invoice_and_refuses_a_missing_id() -> Result<(), String> {
+        let store = BillStore::open_in_memory().map_err(|e| e.to_string())?;
+        store
+            .create_invoice(
+                "INV-P",
+                "buyer",
+                "Buyer GmbH",
+                "buyer@example.test",
+                None,
+                None,
+                None,
+                NaiveDate::from_ymd_opt(2026, 11, 1).ok_or("date")?,
+                NaiveDate::from_ymd_opt(2026, 11, 15).ok_or("date")?,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+        store
+            .add_item("INV-P", "Work", 1.0, 10000, 0.20)
+            .map_err(|e| e.to_string())?;
+        store
+            .update_status("INV-P", InvoiceStatus::Issued)
+            .map_err(|e| e.to_string())?;
+        let party = |scheme: &str, id: &str, reference: Option<&str>| XrParty {
+            name: "Party".into(),
+            street: "Street 1".into(),
+            city: "Wien".into(),
+            postcode: "1010".into(),
+            country: "AT".into(),
+            email: "party@example.test".into(),
+            vat_id: Some("ATU12345678".into()),
+            phone: Some("+431111".into()),
+            iban: Some("AT611904300234573201".into()),
+            buyer_reference: reference.map(str::to_string),
+            peppol_scheme: Some(scheme.into()),
+            peppol_id: Some(id.into()),
+        };
+        store
+            .save_xrechnung_party("seller", &party("9930", "ATU12345678", None))
+            .map_err(|e| e.to_string())?;
+        store
+            .save_xrechnung_party(
+                "INV-P",
+                &party("0204", "04011000-12345-03", Some("04011000-12345-03")),
+            )
+            .map_err(|e| e.to_string())?;
+        let row = store.peppol_prepare("INV-P").map_err(|e| e.to_string())?;
+        if row.status != "prepared" {
+            return Err(row.status);
+        }
+        if !row.package.contains("StandardBusinessDocument")
+            || !row.package.contains("9930:ATU12345678")
+            || !row.package.contains("0204:04011000-12345-03")
+            || !row
+                .package
+                .contains("urn:fdc:peppol.eu:2017:poacc:billing:01:1.0")
+            || row.package.contains("schemeID=\"EM\"")
+        {
+            return Err("SBDH package is missing the participant ids".into());
+        }
+        store
+            .save_xrechnung_party(
+                "seller",
+                &XrParty {
+                    peppol_scheme: None,
+                    peppol_id: None,
+                    ..party("9930", "ATU12345678", None)
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        if store.peppol_prepare("INV-P").is_ok() {
+            return Err("missing participant id should fail".into());
+        }
+        Ok(())
     }
 }
