@@ -5,11 +5,16 @@
 use billcraft_core::*;
 use chrono::NaiveDate;
 use clap::Parser;
+use craft_biz_ui::bookend::{self, Bar, Spec};
+use craft_biz_ui::menu::Item;
 use eframe::egui::{self, Color32, RichText};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "billcraft-app", about = "Native egui desktop host for BillCraft")]
+#[command(
+    name = "billcraft-app",
+    about = "Native egui desktop host for BillCraft"
+)]
 struct Args {
     #[arg(long)]
     smoke: bool,
@@ -51,6 +56,7 @@ fn run_smoke_checks() -> Result<(), Box<dyn std::error::Error>> {
     if !eb.contains("SMOKE-001") {
         return Err("ebInterface export failed smoke verification".into());
     }
+    bookend::smoke("BillCraft", env!("CARGO_PKG_VERSION"), "invoices")?;
     println!("smoke: ok (billcraft-app)");
     Ok(())
 }
@@ -87,6 +93,9 @@ struct BillApp {
     selected_invoice: Option<String>,
     items: Vec<InvoiceItem>,
     eb_preview: Option<String>,
+    bar: Bar,
+    dark: bool,
+    zoom: f32,
 }
 
 impl BillApp {
@@ -108,6 +117,35 @@ impl BillApp {
             selected_invoice: None,
             items: Vec::new(),
             eb_preview: None,
+            bar: Bar::new(),
+            dark: true,
+            zoom: 1.0,
+        }
+    }
+
+    fn paint_menu(&mut self, ui: &mut egui::Ui) {
+        let docs = bookend::repo_docs(env!("CARGO_MANIFEST_DIR"));
+        let spec = Spec {
+            name: "BillCraft",
+            version: env!("CARGO_PKG_VERSION"),
+            description: "Invoices, ebInterface, pain.008, and XRechnung.",
+            repository: "https://github.com/sandraschi/billcraft",
+            docs: &docs,
+            dark: self.dark,
+            zoom: self.zoom,
+            file: vec![Item::action("Refresh", "app.refresh")],
+            view: Vec::new(),
+            middle: Vec::new(),
+        };
+        let change = self.bar.show(ui, &spec);
+        if let Some(dark) = change.dark {
+            self.dark = dark;
+        }
+        if let Some(zoom) = change.zoom {
+            self.zoom = zoom;
+        }
+        if change.action.as_deref() == Some("app.refresh") {
+            self.refresh();
         }
     }
 
@@ -128,10 +166,18 @@ impl BillApp {
 
 impl eframe::App for BillApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.paint_menu(ui);
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("💶 BillCraft").strong().color(Color32::from_rgb(46, 204, 113)));
+            ui.heading(
+                RichText::new("💶 BillCraft")
+                    .strong()
+                    .color(Color32::from_rgb(46, 204, 113)),
+            );
             ui.separator();
-            ui.label(RichText::new("Sovereign e-Invoicing (ebInterface 6.1) & SEPA ISO 20022 Engine").weak());
+            ui.label(
+                RichText::new("Sovereign e-Invoicing (ebInterface 6.1) & SEPA ISO 20022 Engine")
+                    .weak(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Refresh").clicked() {
                     self.refresh();
@@ -142,13 +188,37 @@ impl eframe::App for BillApp {
 
         // Live KPI HUD
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Invoiced: €{:.2}", self.stats.total_gross_cents as f64 / 100.0)).strong());
+            ui.label(
+                RichText::new(format!(
+                    "Invoiced: €{:.2}",
+                    self.stats.total_gross_cents as f64 / 100.0
+                ))
+                .strong(),
+            );
             ui.separator();
-            ui.label(RichText::new(format!("Paid: €{:.2}", self.stats.paid_gross_cents as f64 / 100.0)).color(Color32::from_rgb(46, 204, 113)));
+            ui.label(
+                RichText::new(format!(
+                    "Paid: €{:.2}",
+                    self.stats.paid_gross_cents as f64 / 100.0
+                ))
+                .color(Color32::from_rgb(46, 204, 113)),
+            );
             ui.separator();
-            ui.label(RichText::new(format!("Overdue: €{:.2}", self.stats.overdue_gross_cents as f64 / 100.0)).color(Color32::from_rgb(231, 76, 60)));
+            ui.label(
+                RichText::new(format!(
+                    "Overdue: €{:.2}",
+                    self.stats.overdue_gross_cents as f64 / 100.0
+                ))
+                .color(Color32::from_rgb(231, 76, 60)),
+            );
             ui.separator();
-            ui.label(RichText::new(format!("Active MRR: €{:.2}", self.stats.mrr_cents as f64 / 100.0)).color(Color32::from_rgb(52, 152, 219)));
+            ui.label(
+                RichText::new(format!(
+                    "Active MRR: €{:.2}",
+                    self.stats.mrr_cents as f64 / 100.0
+                ))
+                .color(Color32::from_rgb(52, 152, 219)),
+            );
         });
         ui.separator();
 

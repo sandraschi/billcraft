@@ -1,5 +1,5 @@
 ---
-updated: 2026-11-10T03:00:00+01:00
+updated: 2026-11-13T02:10:00+01:00
 agent: antigravity
 status: completed
 tags: [billcraft, invoicing, ebinterface, sepa, craft-biz]
@@ -16,7 +16,7 @@ tags: [billcraft, invoicing, ebinterface, sepa, craft-biz]
 - Pushed to GitHub at `https://github.com/sandraschi/billcraft`.
 
 ## Last Concrete Action
-- Verified `mcp-central-docs\starts\billcraft-start.bat --smoke` exits with code 0 (`smoke: ok (billcraft-app)`).
+- `export_xrechnung` was accepted by KoSIT Validator 1.6.3 with the XRechnung 3.0.2 configuration of 31 August 2026. CLI: `party` then `export-xrechnung`.
 
 ## Next Step
-- Conduct pilot run with live customer accounts and Erste Bank Telebanking Direct Debit upload.
+- The thin-plan queue is empty. The menu bar is on the window.

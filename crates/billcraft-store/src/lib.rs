@@ -18,6 +18,8 @@ pub enum BillStoreError {
     NotFound(String),
     #[error("Invalid status transition: {0}")]
     InvalidStatus(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +164,20 @@ impl BillStore {
             );
             CREATE INDEX IF NOT EXISTS idx_items_invoice ON invoice_items(invoice_id);
 
+            CREATE TABLE IF NOT EXISTS xrechnung_party (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                street TEXT NOT NULL,
+                city TEXT NOT NULL,
+                postcode TEXT NOT NULL,
+                country TEXT NOT NULL,
+                email TEXT NOT NULL,
+                vat_id TEXT,
+                phone TEXT,
+                iban TEXT,
+                buyer_reference TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id TEXT PRIMARY KEY,
                 customer_id TEXT NOT NULL,
@@ -246,10 +262,15 @@ impl BillStore {
         unit_price_cents: i64,
         tax_rate: f64,
     ) -> Result<InvoiceItem, BillStoreError> {
-        let item_id = format!("{invoice_id}-item-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let item_id = format!(
+            "{invoice_id}-item-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let total_cents = (quantity * unit_price_cents as f64).round() as i64;
 
-        let mut stmt = self.conn.prepare("SELECT COALESCE(MAX(position), 0) + 1 FROM invoice_items WHERE invoice_id = ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM invoice_items WHERE invoice_id = ?1",
+        )?;
         let pos: i32 = stmt.query_row(params![invoice_id], |row| row.get(0))?;
 
         let item = InvoiceItem {
@@ -347,7 +368,10 @@ impl BillStore {
         .ok_or_else(|| BillStoreError::NotFound(id.to_string()))
     }
 
-    pub fn list_invoices(&self, status: Option<InvoiceStatus>) -> Result<Vec<Invoice>, BillStoreError> {
+    pub fn list_invoices(
+        &self,
+        status: Option<InvoiceStatus>,
+    ) -> Result<Vec<Invoice>, BillStoreError> {
         let mut sql = "SELECT id, customer_id, customer_name, customer_email, customer_uid, customer_iban,
                               customer_bic, status, issue_date, due_date, currency, net_cents, tax_cents,
                               gross_cents, notes, created_at
@@ -517,17 +541,23 @@ impl BillStore {
              FROM invoices",
         )?;
 
-        let (total_invoices, total_net_cents, total_tax_cents, total_gross_cents, paid_gross_cents, overdue_gross_cents) =
-            stmt.query_row([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)? as usize,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            })?;
+        let (
+            total_invoices,
+            total_net_cents,
+            total_tax_cents,
+            total_gross_cents,
+            paid_gross_cents,
+            overdue_gross_cents,
+        ) = stmt.query_row([], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
 
         let mut sub_stmt = self.conn.prepare(
             "SELECT COALESCE(SUM(CASE WHEN interval_months = 1 THEN amount_cents WHEN interval_months = 12 THEN amount_cents / 12 ELSE amount_cents END), 0)
@@ -557,19 +587,30 @@ impl BillStore {
         xml.push_str("            eb:GeneratingSystem=\"BillCraft Local-First Engine\"\n");
         xml.push_str("            eb:DocumentType=\"Invoice\"\n");
         xml.push_str(&format!("            eb:InvoiceNumber=\"{}\"\n", inv.id));
-        xml.push_str(&format!("            eb:InvoiceDate=\"{}\">\n", inv.issue_date));
+        xml.push_str(&format!(
+            "            eb:InvoiceDate=\"{}\">\n",
+            inv.issue_date
+        ));
 
         // Invoice Recipient
         xml.push_str("  <eb:InvoiceRecipient>\n");
         if let Some(uid) = &inv.customer_uid {
-            xml.push_str(&format!("    <eb:VATIdentificationNumber>{uid}</eb:VATIdentificationNumber>\n"));
+            xml.push_str(&format!(
+                "    <eb:VATIdentificationNumber>{uid}</eb:VATIdentificationNumber>\n"
+            ));
         }
         xml.push_str("    <eb:OrderReference>\n");
-        xml.push_str(&format!("      <eb:OrderID>ORDER-{}</eb:OrderID>\n", inv.id));
+        xml.push_str(&format!(
+            "      <eb:OrderID>ORDER-{}</eb:OrderID>\n",
+            inv.id
+        ));
         xml.push_str("    </eb:OrderReference>\n");
         xml.push_str("    <eb:Address>\n");
         xml.push_str(&format!("      <eb:Name>{}</eb:Name>\n", inv.customer_name));
-        xml.push_str(&format!("      <eb:Email>{}</eb:Email>\n", inv.customer_email));
+        xml.push_str(&format!(
+            "      <eb:Email>{}</eb:Email>\n",
+            inv.customer_email
+        ));
         xml.push_str("    </eb:Address>\n");
         xml.push_str("  </eb:InvoiceRecipient>\n");
 
@@ -578,12 +619,30 @@ impl BillStore {
         xml.push_str("    <eb:ItemList>\n");
         for it in &items {
             xml.push_str("      <eb:ListLineItem>\n");
-            xml.push_str(&format!("        <eb:PositionNumber>{}</eb:PositionNumber>\n", it.position));
-            xml.push_str(&format!("        <eb:Description>{}</eb:Description>\n", it.description));
-            xml.push_str(&format!("        <eb:Quantity eb:Unit=\"HUR\">{:.2}</eb:Quantity>\n", it.quantity));
-            xml.push_str(&format!("        <eb:UnitPrice>{:.2}</eb:UnitPrice>\n", it.unit_price_cents as f64 / 100.0));
-            xml.push_str(&format!("        <eb:TaxRate>{:.1}</eb:TaxRate>\n", it.tax_rate * 100.0));
-            xml.push_str(&format!("        <eb:LineItemAmount>{:.2}</eb:LineItemAmount>\n", it.total_cents as f64 / 100.0));
+            xml.push_str(&format!(
+                "        <eb:PositionNumber>{}</eb:PositionNumber>\n",
+                it.position
+            ));
+            xml.push_str(&format!(
+                "        <eb:Description>{}</eb:Description>\n",
+                it.description
+            ));
+            xml.push_str(&format!(
+                "        <eb:Quantity eb:Unit=\"HUR\">{:.2}</eb:Quantity>\n",
+                it.quantity
+            ));
+            xml.push_str(&format!(
+                "        <eb:UnitPrice>{:.2}</eb:UnitPrice>\n",
+                it.unit_price_cents as f64 / 100.0
+            ));
+            xml.push_str(&format!(
+                "        <eb:TaxRate>{:.1}</eb:TaxRate>\n",
+                it.tax_rate * 100.0
+            ));
+            xml.push_str(&format!(
+                "        <eb:LineItemAmount>{:.2}</eb:LineItemAmount>\n",
+                it.total_cents as f64 / 100.0
+            ));
             xml.push_str("      </eb:ListLineItem>\n");
         }
         xml.push_str("    </eb:ItemList>\n");
@@ -605,8 +664,14 @@ impl BillStore {
         xml.push_str("  </eb:Tax>\n");
 
         // Total
-        xml.push_str(&format!("  <eb:TotalGrossAmount>{:.2}</eb:TotalGrossAmount>\n", inv.gross_cents as f64 / 100.0));
-        xml.push_str(&format!("  <eb:PayableAmount>{:.2}</eb:PayableAmount>\n", inv.gross_cents as f64 / 100.0));
+        xml.push_str(&format!(
+            "  <eb:TotalGrossAmount>{:.2}</eb:TotalGrossAmount>\n",
+            inv.gross_cents as f64 / 100.0
+        ));
+        xml.push_str(&format!(
+            "  <eb:PayableAmount>{:.2}</eb:PayableAmount>\n",
+            inv.gross_cents as f64 / 100.0
+        ));
         xml.push_str("</eb:Invoice>\n");
 
         Ok(xml)
@@ -636,9 +701,15 @@ impl BillStore {
         xml.push_str("  <CstmrDrctDbtInitn>\n");
         xml.push_str("    <GrpHdr>\n");
         xml.push_str(&format!("      <MsgId>{msg_id}</MsgId>\n"));
-        xml.push_str(&format!("      <CreDtTm>{}</CreDtTm>\n", Utc::now().format("%Y-%m-%dT%H:%M:%SZ")));
+        xml.push_str(&format!(
+            "      <CreDtTm>{}</CreDtTm>\n",
+            Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        ));
         xml.push_str(&format!("      <NbOfTxs>{count}</NbOfTxs>\n"));
-        xml.push_str(&format!("      <CtrlSum>{:.2}</CtrlSum>\n", total_cents as f64 / 100.0));
+        xml.push_str(&format!(
+            "      <CtrlSum>{:.2}</CtrlSum>\n",
+            total_cents as f64 / 100.0
+        ));
         xml.push_str("      <InitgPty>\n");
         xml.push_str(&format!("        <Nm>{creditor_name}</Nm>\n"));
         xml.push_str("      </InitgPty>\n");
@@ -652,7 +723,10 @@ impl BillStore {
         xml.push_str("        <LclInstrm><Cd>CORE</Cd></LclInstrm>\n");
         xml.push_str("        <SeqTp>RCUR</SeqTp>\n");
         xml.push_str("      </PmtTpInf>\n");
-        xml.push_str(&format!("      <ReqdColltnDt>{}</ReqdColltnDt>\n", Utc::now().date_naive()));
+        xml.push_str(&format!(
+            "      <ReqdColltnDt>{}</ReqdColltnDt>\n",
+            Utc::now().date_naive()
+        ));
         xml.push_str("      <Cdtr>\n");
         xml.push_str(&format!("        <Nm>{creditor_name}</Nm>\n"));
         xml.push_str("      </Cdtr>\n");
@@ -677,21 +751,36 @@ impl BillStore {
             xml.push_str("        <PmtId>\n");
             xml.push_str(&format!("          <EndToEndId>{}</EndToEndId>\n", inv.id));
             xml.push_str("        </PmtId>\n");
-            xml.push_str(&format!("        <InstdAmt Ccy=\"EUR\">{:.2}</InstdAmt>\n", inv.gross_cents as f64 / 100.0));
+            xml.push_str(&format!(
+                "        <InstdAmt Ccy=\"EUR\">{:.2}</InstdAmt>\n",
+                inv.gross_cents as f64 / 100.0
+            ));
             xml.push_str("        <DrctDbtTx>\n");
             xml.push_str("          <MndtRltdInf>\n");
-            xml.push_str(&format!("            <MndtId>MANDATE-{}</MndtId>\n", inv.customer_id));
-            xml.push_str(&format!("            <DtOfSgntr>{}</DtOfSgntr>\n", inv.issue_date));
+            xml.push_str(&format!(
+                "            <MndtId>MANDATE-{}</MndtId>\n",
+                inv.customer_id
+            ));
+            xml.push_str(&format!(
+                "            <DtOfSgntr>{}</DtOfSgntr>\n",
+                inv.issue_date
+            ));
             xml.push_str("          </MndtRltdInf>\n");
             xml.push_str("        </DrctDbtTx>\n");
             xml.push_str("        <DbtrAgt>\n");
-            xml.push_str(&format!("          <FinInstnId><BIC>{}</BIC></FinInstnId>\n", inv.customer_bic.as_deref().unwrap_or("NOTPROVIDED")));
+            xml.push_str(&format!(
+                "          <FinInstnId><BIC>{}</BIC></FinInstnId>\n",
+                inv.customer_bic.as_deref().unwrap_or("NOTPROVIDED")
+            ));
             xml.push_str("        </DbtrAgt>\n");
             xml.push_str("        <Dbtr>\n");
             xml.push_str(&format!("          <Nm>{}</Nm>\n", inv.customer_name));
             xml.push_str("        </Dbtr>\n");
             xml.push_str("        <DbtrAcct>\n");
-            xml.push_str(&format!("          <Id><IBAN>{}</IBAN></Id>\n", inv.customer_iban.as_deref().unwrap_or("NOTPROVIDED")));
+            xml.push_str(&format!(
+                "          <Id><IBAN>{}</IBAN></Id>\n",
+                inv.customer_iban.as_deref().unwrap_or("NOTPROVIDED")
+            ));
             xml.push_str("        </DbtrAcct>\n");
             xml.push_str("        <RmtInf>\n");
             xml.push_str(&format!("          <Ustrd>Invoice {}</Ustrd>\n", inv.id));
@@ -705,6 +794,347 @@ impl BillStore {
 
         Ok(xml)
     }
+
+    pub fn save_xrechnung_party(&self, id: &str, party: &XrParty) -> Result<(), BillStoreError> {
+        if party.country.len() != 2 {
+            return Err(BillStoreError::Validation(
+                "XRechnung country is a two-letter code".into(),
+            ));
+        }
+        self.conn.execute(
+            "INSERT INTO xrechnung_party (
+                id, name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                street = excluded.street,
+                city = excluded.city,
+                postcode = excluded.postcode,
+                country = excluded.country,
+                email = excluded.email,
+                vat_id = excluded.vat_id,
+                phone = excluded.phone,
+                iban = excluded.iban,
+                buyer_reference = excluded.buyer_reference",
+            params![
+                id,
+                party.name,
+                party.street,
+                party.city,
+                party.postcode,
+                party.country,
+                party.email,
+                party.vat_id,
+                party.phone,
+                party.iban,
+                party.buyer_reference
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn xrechnung_party(&self, id: &str) -> Result<XrParty, BillStoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, street, city, postcode, country, email, vat_id, phone, iban, buyer_reference
+             FROM xrechnung_party WHERE id = ?1",
+        )?;
+        let party = stmt
+            .query_row(params![id], |row| {
+                Ok(XrParty {
+                    name: row.get(0)?,
+                    street: row.get(1)?,
+                    city: row.get(2)?,
+                    postcode: row.get(3)?,
+                    country: row.get(4)?,
+                    email: row.get(5)?,
+                    vat_id: row.get(6)?,
+                    phone: row.get(7)?,
+                    iban: row.get(8)?,
+                    buyer_reference: row.get(9)?,
+                })
+            })
+            .optional()?
+            .ok_or_else(|| {
+                BillStoreError::Validation(format!("XRechnung party {id} is missing"))
+            })?;
+        Ok(party)
+    }
+
+    /// UBL 2.1 invoice for XRechnung 3.0.2.
+    /// Seller is party id `seller`. Buyer is party id equal to the invoice id.
+    /// A missing party is an error. This is not a Peppol transmission.
+    pub fn export_xrechnung(&self, invoice_id: &str) -> Result<String, BillStoreError> {
+        let inv = self.get_invoice(invoice_id)?;
+        let items = self.get_items(invoice_id)?;
+        if items.is_empty() {
+            return Err(BillStoreError::Validation(
+                "XRechnung needs at least one invoice line".into(),
+            ));
+        }
+        let seller = self.xrechnung_party("seller")?;
+        let buyer = self.xrechnung_party(invoice_id)?;
+        let seller_vat = seller
+            .vat_id
+            .as_deref()
+            .ok_or_else(|| BillStoreError::Validation("XRechnung seller needs a VAT id".into()))?;
+        let seller_phone = seller.phone.as_deref().ok_or_else(|| {
+            BillStoreError::Validation("XRechnung seller needs a phone number".into())
+        })?;
+        let seller_iban = seller
+            .iban
+            .as_deref()
+            .ok_or_else(|| BillStoreError::Validation("XRechnung seller needs an IBAN".into()))?;
+        let buyer_ref = buyer.buyer_reference.as_deref().ok_or_else(|| {
+            BillStoreError::Validation("XRechnung buyer needs a buyer reference".into())
+        })?;
+        let currency = &inv.currency;
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<ubl:Invoice xmlns:ubl=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\" xmlns:cac=\"urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2\" xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">\n");
+        xml.push_str("  <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0</cbc:CustomizationID>\n");
+        xml.push_str(
+            "  <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>\n",
+        );
+        xml.push_str(&format!("  <cbc:ID>{}</cbc:ID>\n", xml_escape(&inv.id)));
+        xml.push_str(&format!(
+            "  <cbc:IssueDate>{}</cbc:IssueDate>\n",
+            inv.issue_date
+        ));
+        xml.push_str(&format!("  <cbc:DueDate>{}</cbc:DueDate>\n", inv.due_date));
+        xml.push_str("  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>\n");
+        xml.push_str(&format!(
+            "  <cbc:DocumentCurrencyCode>{}</cbc:DocumentCurrencyCode>\n",
+            xml_escape(currency)
+        ));
+        xml.push_str(&format!(
+            "  <cbc:BuyerReference>{}</cbc:BuyerReference>\n",
+            xml_escape(buyer_ref)
+        ));
+        xml.push_str("  <cac:InvoicePeriod>\n");
+        xml.push_str(&format!(
+            "    <cbc:StartDate>{}</cbc:StartDate>\n",
+            inv.issue_date
+        ));
+        xml.push_str(&format!(
+            "    <cbc:EndDate>{}</cbc:EndDate>\n",
+            inv.due_date
+        ));
+        xml.push_str("  </cac:InvoicePeriod>\n");
+        xml.push_str(&party_xml(
+            "AccountingSupplierParty",
+            &seller,
+            true,
+            seller_vat,
+            seller_phone,
+        ));
+        xml.push_str(&party_xml("AccountingCustomerParty", &buyer, false, "", ""));
+        xml.push_str("  <cac:PaymentMeans>\n");
+        xml.push_str("    <cbc:PaymentMeansCode>58</cbc:PaymentMeansCode>\n");
+        xml.push_str("    <cac:PayeeFinancialAccount>\n");
+        xml.push_str(&format!(
+            "      <cbc:ID>{}</cbc:ID>\n",
+            xml_escape(seller_iban)
+        ));
+        xml.push_str("    </cac:PayeeFinancialAccount>\n");
+        xml.push_str("  </cac:PaymentMeans>\n");
+        xml.push_str(&tax_and_totals(&inv, &items));
+        for it in &items {
+            let line = money(it.total_cents);
+            let price = money(it.unit_price_cents);
+            let percent = tax_percent(it.tax_rate);
+            let qty = format_qty(it.quantity);
+            xml.push_str("  <cac:InvoiceLine>\n");
+            xml.push_str(&format!("    <cbc:ID>{}</cbc:ID>\n", it.position));
+            xml.push_str(&format!(
+                "    <cbc:InvoicedQuantity unitCode=\"HUR\">{qty}</cbc:InvoicedQuantity>\n"
+            ));
+            xml.push_str(&format!(
+                "    <cbc:LineExtensionAmount currencyID=\"{currency}\">{line}</cbc:LineExtensionAmount>\n"
+            ));
+            xml.push_str("    <cac:Item>\n");
+            xml.push_str(&format!(
+                "      <cbc:Name>{}</cbc:Name>\n",
+                xml_escape(&it.description)
+            ));
+            xml.push_str("      <cac:ClassifiedTaxCategory>\n");
+            xml.push_str("        <cbc:ID>S</cbc:ID>\n");
+            xml.push_str(&format!("        <cbc:Percent>{percent}</cbc:Percent>\n"));
+            xml.push_str("        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>\n");
+            xml.push_str("      </cac:ClassifiedTaxCategory>\n");
+            xml.push_str("    </cac:Item>\n");
+            xml.push_str("    <cac:Price>\n");
+            xml.push_str(&format!(
+                "      <cbc:PriceAmount currencyID=\"{currency}\">{price}</cbc:PriceAmount>\n"
+            ));
+            xml.push_str("    </cac:Price>\n");
+            xml.push_str("  </cac:InvoiceLine>\n");
+        }
+        xml.push_str("</ubl:Invoice>\n");
+        Ok(xml)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct XrParty {
+    pub name: String,
+    pub street: String,
+    pub city: String,
+    pub postcode: String,
+    pub country: String,
+    pub email: String,
+    pub vat_id: Option<String>,
+    pub phone: Option<String>,
+    pub iban: Option<String>,
+    pub buyer_reference: Option<String>,
+}
+
+fn money(cents: i64) -> String {
+    format!("{:.2}", cents as f64 / 100.0)
+}
+
+fn tax_percent(rate: f64) -> String {
+    let percent = (rate * 100.0).round();
+    if percent.fract() == 0.0 {
+        format!("{}", percent as i64)
+    } else {
+        format!("{percent}")
+    }
+}
+
+fn format_qty(quantity: f64) -> String {
+    if quantity.fract() == 0.0 {
+        format!("{}", quantity as i64)
+    } else {
+        format!("{quantity}")
+    }
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn party_xml(tag: &str, party: &XrParty, seller: bool, vat_id: &str, phone: &str) -> String {
+    let mut xml = format!("  <cac:{tag}>\n    <cac:Party>\n");
+    xml.push_str(&format!(
+        "      <cbc:EndpointID schemeID=\"EM\">{}</cbc:EndpointID>\n",
+        xml_escape(&party.email)
+    ));
+    xml.push_str("      <cac:PostalAddress>\n");
+    xml.push_str(&format!(
+        "        <cbc:StreetName>{}</cbc:StreetName>\n",
+        xml_escape(&party.street)
+    ));
+    xml.push_str(&format!(
+        "        <cbc:CityName>{}</cbc:CityName>\n",
+        xml_escape(&party.city)
+    ));
+    xml.push_str(&format!(
+        "        <cbc:PostalZone>{}</cbc:PostalZone>\n",
+        xml_escape(&party.postcode)
+    ));
+    xml.push_str("        <cac:Country>\n");
+    xml.push_str(&format!(
+        "          <cbc:IdentificationCode>{}</cbc:IdentificationCode>\n",
+        xml_escape(&party.country)
+    ));
+    xml.push_str("        </cac:Country>\n");
+    xml.push_str("      </cac:PostalAddress>\n");
+    if seller {
+        xml.push_str("      <cac:PartyTaxScheme>\n");
+        xml.push_str(&format!(
+            "        <cbc:CompanyID>{}</cbc:CompanyID>\n",
+            xml_escape(vat_id)
+        ));
+        xml.push_str("        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>\n");
+        xml.push_str("      </cac:PartyTaxScheme>\n");
+    }
+    xml.push_str("      <cac:PartyLegalEntity>\n");
+    xml.push_str(&format!(
+        "        <cbc:RegistrationName>{}</cbc:RegistrationName>\n",
+        xml_escape(&party.name)
+    ));
+    xml.push_str("      </cac:PartyLegalEntity>\n");
+    if seller {
+        xml.push_str("      <cac:Contact>\n");
+        xml.push_str(&format!(
+            "        <cbc:Name>{}</cbc:Name>\n",
+            xml_escape(&party.name)
+        ));
+        xml.push_str(&format!(
+            "        <cbc:Telephone>{}</cbc:Telephone>\n",
+            xml_escape(phone)
+        ));
+        xml.push_str(&format!(
+            "        <cbc:ElectronicMail>{}</cbc:ElectronicMail>\n",
+            xml_escape(&party.email)
+        ));
+        xml.push_str("      </cac:Contact>\n");
+    }
+    xml.push_str("    </cac:Party>\n");
+    xml.push_str(&format!("  </cac:{tag}>\n"));
+    xml
+}
+
+fn tax_and_totals(inv: &Invoice, items: &[InvoiceItem]) -> String {
+    let currency = &inv.currency;
+    let mut groups: Vec<(i64, i64, i64)> = Vec::new();
+    for item in items {
+        let percent = (item.tax_rate * 100.0).round() as i64;
+        let tax = (item.total_cents as f64 * item.tax_rate).round() as i64;
+        if let Some(group) = groups.iter_mut().find(|group| group.0 == percent) {
+            group.1 += item.total_cents;
+            group.2 += tax;
+        } else {
+            groups.push((percent, item.total_cents, tax));
+        }
+    }
+    let mut xml = String::new();
+    xml.push_str("  <cac:TaxTotal>\n");
+    xml.push_str(&format!(
+        "    <cbc:TaxAmount currencyID=\"{currency}\">{}</cbc:TaxAmount>\n",
+        money(inv.tax_cents)
+    ));
+    for (percent, taxable, tax) in &groups {
+        xml.push_str("    <cac:TaxSubtotal>\n");
+        xml.push_str(&format!(
+            "      <cbc:TaxableAmount currencyID=\"{currency}\">{}</cbc:TaxableAmount>\n",
+            money(*taxable)
+        ));
+        xml.push_str(&format!(
+            "      <cbc:TaxAmount currencyID=\"{currency}\">{tax_money}</cbc:TaxAmount>\n",
+            tax_money = money(*tax)
+        ));
+        xml.push_str("      <cac:TaxCategory>\n");
+        xml.push_str("        <cbc:ID>S</cbc:ID>\n");
+        xml.push_str(&format!("        <cbc:Percent>{percent}</cbc:Percent>\n"));
+        xml.push_str("        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>\n");
+        xml.push_str("      </cac:TaxCategory>\n");
+        xml.push_str("    </cac:TaxSubtotal>\n");
+    }
+    xml.push_str("  </cac:TaxTotal>\n");
+    xml.push_str("  <cac:LegalMonetaryTotal>\n");
+    xml.push_str(&format!(
+        "    <cbc:LineExtensionAmount currencyID=\"{currency}\">{}</cbc:LineExtensionAmount>\n",
+        money(inv.net_cents)
+    ));
+    xml.push_str(&format!(
+        "    <cbc:TaxExclusiveAmount currencyID=\"{currency}\">{}</cbc:TaxExclusiveAmount>\n",
+        money(inv.net_cents)
+    ));
+    xml.push_str(&format!(
+        "    <cbc:TaxInclusiveAmount currencyID=\"{currency}\">{}</cbc:TaxInclusiveAmount>\n",
+        money(inv.gross_cents)
+    ));
+    xml.push_str(&format!(
+        "    <cbc:PayableAmount currencyID=\"{currency}\">{}</cbc:PayableAmount>\n",
+        money(inv.gross_cents)
+    ));
+    xml.push_str("  </cac:LegalMonetaryTotal>\n");
+    xml
 }
 
 #[cfg(test)]
@@ -714,26 +1144,36 @@ mod tests {
     #[test]
     fn test_invoice_creation_and_recalculation() {
         let store = BillStore::open_in_memory().unwrap();
-        let inv = store.create_invoice(
-            "INV-001",
-            "cust_acme",
-            "ACME Corp GmbH",
-            "finance@acme.at",
-            Some("ATU12345678"),
-            Some("AT89370400440532013000"),
-            Some("RLBWWATW"),
-            NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 11, 15).unwrap(),
-            Some("Standard payment terms 14 days"),
-        ).unwrap();
+        let inv = store
+            .create_invoice(
+                "INV-001",
+                "cust_acme",
+                "ACME Corp GmbH",
+                "finance@acme.at",
+                Some("ATU12345678"),
+                Some("AT89370400440532013000"),
+                Some("RLBWWATW"),
+                NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 11, 15).unwrap(),
+                Some("Standard payment terms 14 days"),
+            )
+            .unwrap();
 
         assert_eq!(inv.status, InvoiceStatus::Draft);
         assert_eq!(inv.gross_cents, 0);
 
-        store.add_item("INV-001", "Architecture Consulting (hrs)", 10.0, 15000, 0.20).unwrap();
+        store
+            .add_item(
+                "INV-001",
+                "Architecture Consulting (hrs)",
+                10.0,
+                15000,
+                0.20,
+            )
+            .unwrap();
         let fetched = store.get_invoice("INV-001").unwrap();
         assert_eq!(fetched.net_cents, 150000); // 1,500.00 EUR
-        assert_eq!(fetched.tax_cents, 30000);  // 300.00 EUR (20% USt)
+        assert_eq!(fetched.tax_cents, 30000); // 300.00 EUR (20% USt)
         assert_eq!(fetched.gross_cents, 180000); // 1,800.00 EUR
 
         let eb = store.export_ebinterface("INV-001").unwrap();
@@ -741,15 +1181,99 @@ mod tests {
         assert!(eb.contains("<eb:VATIdentificationNumber>ATU12345678</eb:VATIdentificationNumber>"));
         assert!(eb.contains("<eb:TotalGrossAmount>1800.00</eb:TotalGrossAmount>"));
 
-        let sepa = store.export_sepa_direct_debit(
-            &["INV-001".to_string()],
-            "Sandra Schipal Fleet",
-            "AT021200000123456789",
-            "BAWAGATW",
-            "AT99ZZZ00000000001",
-        ).unwrap();
+        let sepa = store
+            .export_sepa_direct_debit(
+                &["INV-001".to_string()],
+                "Sandra Schipal Fleet",
+                "AT021200000123456789",
+                "BAWAGATW",
+                "AT99ZZZ00000000001",
+            )
+            .unwrap();
         assert!(sepa.contains("<MsgId>SEPA-DD-"));
         assert!(sepa.contains("<InstdAmt Ccy=\"EUR\">1800.00</InstdAmt>"));
+
+        store
+            .save_xrechnung_party(
+                "seller",
+                &XrParty {
+                    name: "BillCraft Test Seller".into(),
+                    street: "Testgasse 1".into(),
+                    city: "Wien".into(),
+                    postcode: "1010".into(),
+                    country: "DE".into(),
+                    email: "seller@email.de".into(),
+                    vat_id: Some("DE123456789".into()),
+                    phone: Some("+49 1234-5678".into()),
+                    iban: Some("DE79000000001234567890".into()),
+                    buyer_reference: None,
+                },
+            )
+            .unwrap();
+        store
+            .save_xrechnung_party(
+                "INV-001",
+                &XrParty {
+                    name: "ACME Corp GmbH".into(),
+                    street: "Kaeufergasse 2".into(),
+                    city: "Wien".into(),
+                    postcode: "1020".into(),
+                    country: "DE".into(),
+                    email: "buyer@info.de".into(),
+                    vat_id: None,
+                    phone: None,
+                    iban: None,
+                    buyer_reference: Some("04011000-12345-03".into()),
+                },
+            )
+            .unwrap();
+        let xr = store.export_xrechnung("INV-001").unwrap();
+        assert!(xr.contains("xrechnung_3.0"));
+        assert!(xr.contains("<cbc:ID>INV-001</cbc:ID>"));
+        assert!(xr.contains("<cbc:PayableAmount currencyID=\"EUR\">1800.00</cbc:PayableAmount>"));
+        assert!(xr.contains("Architecture Consulting (hrs)"));
+        let dir = std::env::temp_dir().join(format!("billcraft-xr-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let xml_path = dir.join("INV-001.xml");
+        std::fs::write(&xml_path, &xr).unwrap();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/xrechnung-validator");
+        let canon = std::fs::canonicalize(&root).unwrap();
+        let canon_text = canon.to_string_lossy().to_string();
+        let root = std::path::PathBuf::from(
+            canon_text
+                .strip_prefix(r"\\?\")
+                .unwrap_or(canon_text.as_str()),
+        );
+        let jar = root.join("validator-1.6.3-standalone.jar");
+        let scenarios = root.join("config").join("scenarios.xml");
+        let repo = root.join("config");
+        assert!(
+            jar.is_file(),
+            "KoSIT validator jar missing at {}",
+            jar.display()
+        );
+        let output = std::process::Command::new("java")
+            .arg("-jar")
+            .arg(&jar)
+            .arg("-s")
+            .arg(&scenarios)
+            .arg("-r")
+            .arg(&repo)
+            .arg("-o")
+            .arg(&dir)
+            .arg("-p")
+            .arg(&xml_path)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success() && text.contains("Validation successful"),
+            "{text}"
+        );
     }
 }
-

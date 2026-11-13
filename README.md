@@ -1,5 +1,10 @@
 # BillCraft 🧾
 
+![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
+![Rust 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange?logo=rust)
+![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple)
+![ArtCraft harness](https://img.shields.io/badge/ArtCraft-harness-green)
+
 **Local-first sovereign invoicing, subscription recurring billing, and European e-invoicing engine.**
 
 Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dependency, instant, offline-capable Rust native applications.
@@ -7,7 +12,7 @@ Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dep
 ## Features
 
 - **Austrian ebInterface 6.1**: Full compliance with Austrian federal e-invoicing standards (`ebInterface:Invoice` XML).
-- **EU XRechnung / Peppol Ready**: Compliant XML document generation for B2G European invoicing.
+- **XRechnung 3.0.2**: UBL invoice from stored seller and buyer parties (`billcraft party`, then `billcraft export-xrechnung`). The fixture is accepted by KoSIT Validator 1.6.3 with the configuration of 31 August 2026. This is not a Peppol delivery.
 - **ISO 20022 SEPA Direct Debit (`pain.008.001.02`)**: Automated direct debit batch XML generation with Austrian creditor identifiers.
 - **Subscription Engine**: Automated monthly and annual recurring invoice generation.
 - **Event Bus Integration**: Drains `contract.signed` from `contractcraft` and `timesheet.approved` from `teamcraft`; emits `invoice.issued`, `invoice.paid`, and `invoice.overdue`.

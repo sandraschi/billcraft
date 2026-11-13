@@ -11,7 +11,12 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "billcraft", author, version, about = "Local-first invoicing, ebInterface 6.1 & SEPA engine. CLI + MCP.")]
+#[command(
+    name = "billcraft",
+    author,
+    version,
+    about = "Local-first invoicing, ebInterface 6.1 & SEPA engine. CLI + MCP."
+)]
 struct Cli {
     #[arg(long)]
     db: Option<PathBuf>,
@@ -62,6 +67,27 @@ enum Commands {
         id: String,
     },
     ExportEbinterface {
+        id: String,
+    },
+    /// Store the seller (`seller`) or the buyer (invoice id) used by `export-xrechnung`.
+    Party {
+        id: String,
+        name: String,
+        street: String,
+        city: String,
+        postcode: String,
+        country: String,
+        email: String,
+        #[arg(long)]
+        vat_id: Option<String>,
+        #[arg(long)]
+        phone: Option<String>,
+        #[arg(long)]
+        iban: Option<String>,
+        #[arg(long)]
+        buyer_reference: Option<String>,
+    },
+    ExportXrechnung {
         id: String,
     },
     ExportSepa {
@@ -130,12 +156,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let stats = service.store().stats()?;
             println!("Invoices: {}", stats.total_invoices);
-            println!("Gross Invoiced: €{:.2}", stats.total_gross_cents as f64 / 100.0);
+            println!(
+                "Gross Invoiced: €{:.2}",
+                stats.total_gross_cents as f64 / 100.0
+            );
             println!("Paid: €{:.2}", stats.paid_gross_cents as f64 / 100.0);
             println!("Overdue: €{:.2}", stats.overdue_gross_cents as f64 / 100.0);
             println!("MRR: €{:.2}", stats.mrr_cents as f64 / 100.0);
         }
-        Commands::CreateInvoice { id, customer_id, customer_name, customer_email, uid, iban, bic, days } => {
+        Commands::CreateInvoice {
+            id,
+            customer_id,
+            customer_name,
+            customer_email,
+            uid,
+            iban,
+            bic,
+            days,
+        } => {
             let today = Local::now().date_naive();
             let due = today + chrono::Days::new(days.unwrap_or(14) as u64);
             let inv = service.store().create_invoice(
@@ -150,12 +188,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 due,
                 None,
             )?;
-            println!("Created invoice {} for {} (Status: {:?})", inv.id, inv.customer_name, inv.status);
+            println!(
+                "Created invoice {} for {} (Status: {:?})",
+                inv.id, inv.customer_name, inv.status
+            );
         }
-        Commands::AddItem { invoice_id, description, quantity, unit_price_cents, tax_rate } => {
-            let it = service.store().add_item(&invoice_id, &description, quantity, unit_price_cents, tax_rate)?;
+        Commands::AddItem {
+            invoice_id,
+            description,
+            quantity,
+            unit_price_cents,
+            tax_rate,
+        } => {
+            let it = service.store().add_item(
+                &invoice_id,
+                &description,
+                quantity,
+                unit_price_cents,
+                tax_rate,
+            )?;
             let inv = service.store().get_invoice(&invoice_id)?;
-            println!("Added item {} to {}. Invoice gross now: €{:.2}", it.id, invoice_id, inv.gross_cents as f64 / 100.0);
+            println!(
+                "Added item {} to {}. Invoice gross now: €{:.2}",
+                it.id,
+                invoice_id,
+                inv.gross_cents as f64 / 100.0
+            );
         }
         Commands::Show { id } => {
             let inv = service.store().get_invoice(&id)?;
@@ -163,22 +221,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Invoice: {}", inv.id);
             println!("Customer: {} ({})", inv.customer_name, inv.customer_email);
             println!("Status: {:?}", inv.status);
-            println!("Net: €{:.2} | USt (20%): €{:.2} | Gross: €{:.2}", inv.net_cents as f64 / 100.0, inv.tax_cents as f64 / 100.0, inv.gross_cents as f64 / 100.0);
+            println!(
+                "Net: €{:.2} | USt (20%): €{:.2} | Gross: €{:.2}",
+                inv.net_cents as f64 / 100.0,
+                inv.tax_cents as f64 / 100.0,
+                inv.gross_cents as f64 / 100.0
+            );
             println!("Items ({}):", items.len());
             for it in items {
-                println!("  #{}: {} - {:.1}x @ €{:.2} = €{:.2}", it.position, it.description, it.quantity, it.unit_price_cents as f64 / 100.0, it.total_cents as f64 / 100.0);
+                println!(
+                    "  #{}: {} - {:.1}x @ €{:.2} = €{:.2}",
+                    it.position,
+                    it.description,
+                    it.quantity,
+                    it.unit_price_cents as f64 / 100.0,
+                    it.total_cents as f64 / 100.0
+                );
             }
         }
         Commands::List { status } => {
             let filter = status.as_deref().and_then(InvoiceStatus::from_str_opt);
             let invoices = service.store().list_invoices(filter)?;
             for i in invoices {
-                println!("{:14} {:20} {:10} €{:.2}", i.id, i.customer_name, i.status.as_str(), i.gross_cents as f64 / 100.0);
+                println!(
+                    "{:14} {:20} {:10} €{:.2}",
+                    i.id,
+                    i.customer_name,
+                    i.status.as_str(),
+                    i.gross_cents as f64 / 100.0
+                );
             }
         }
         Commands::Issue { id } => {
             let inv = service.issue_invoice(&id)?;
-            println!("Issued invoice {} (Gross: €{:.2})", inv.id, inv.gross_cents as f64 / 100.0);
+            println!(
+                "Issued invoice {} (Gross: €{:.2})",
+                inv.id,
+                inv.gross_cents as f64 / 100.0
+            );
         }
         Commands::MarkPaid { id } => {
             let inv = service.mark_paid(&id)?;
@@ -186,13 +266,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::FlagOverdue { id } => {
             let inv = service.flag_overdue(&id)?;
-            println!("Marked invoice {} as OVERDUE and emitted penalty signal", inv.id);
+            println!(
+                "Marked invoice {} as OVERDUE and emitted penalty signal",
+                inv.id
+            );
         }
         Commands::ExportEbinterface { id } => {
             let xml = service.store().export_ebinterface(&id)?;
             println!("{xml}");
         }
-        Commands::ExportSepa { invoice_ids, creditor_name, creditor_iban, creditor_bic, creditor_id } => {
+        Commands::Party {
+            id,
+            name,
+            street,
+            city,
+            postcode,
+            country,
+            email,
+            vat_id,
+            phone,
+            iban,
+            buyer_reference,
+        } => {
+            service.store().save_xrechnung_party(
+                &id,
+                &XrParty {
+                    name,
+                    street,
+                    city,
+                    postcode,
+                    country,
+                    email,
+                    vat_id,
+                    phone,
+                    iban,
+                    buyer_reference,
+                },
+            )?;
+            println!("Stored XRechnung party {id}");
+        }
+        Commands::ExportXrechnung { id } => {
+            let xml = service.store().export_xrechnung(&id)?;
+            println!("{xml}");
+        }
+        Commands::ExportSepa {
+            invoice_ids,
+            creditor_name,
+            creditor_iban,
+            creditor_bic,
+            creditor_id,
+        } => {
             let xml = service.store().export_sepa_direct_debit(
                 &invoice_ids,
                 &creditor_name,
@@ -202,15 +325,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("{xml}");
         }
-        Commands::SubCreate { id, customer_id, plan_name, interval_months, amount_cents } => {
+        Commands::SubCreate {
+            id,
+            customer_id,
+            plan_name,
+            interval_months,
+            amount_cents,
+        } => {
             let next = Local::now().date_naive() + chrono::Months::new(interval_months as u32);
-            let sub = service.store().create_subscription(&id, &customer_id, &plan_name, interval_months, amount_cents, next)?;
-            println!("Created subscription {} for {} at €{:.2}/{}mo", sub.id, sub.customer_id, sub.amount_cents as f64 / 100.0, sub.interval_months);
+            let sub = service.store().create_subscription(
+                &id,
+                &customer_id,
+                &plan_name,
+                interval_months,
+                amount_cents,
+                next,
+            )?;
+            println!(
+                "Created subscription {} for {} at €{:.2}/{}mo",
+                sub.id,
+                sub.customer_id,
+                sub.amount_cents as f64 / 100.0,
+                sub.interval_months
+            );
         }
         Commands::SubList => {
             let subs = service.store().list_subscriptions()?;
             for s in subs {
-                println!("{:12} {:16} {:14} €{:.2} (next: {})", s.id, s.customer_id, s.plan_name, s.amount_cents as f64 / 100.0, s.next_billing_date);
+                println!(
+                    "{:12} {:16} {:14} €{:.2} (next: {})",
+                    s.id,
+                    s.customer_id,
+                    s.plan_name,
+                    s.amount_cents as f64 / 100.0,
+                    s.next_billing_date
+                );
             }
         }
         Commands::Stats => {
@@ -219,7 +368,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::InboxDrain => {
             let res = service.drain_inbox()?;
-            println!("Drained {} events from inbox. Invoices created: {:?}", res.processed, res.created_invoices);
+            println!(
+                "Drained {} events from inbox. Invoices created: {:?}",
+                res.processed, res.created_invoices
+            );
         }
         Commands::Tools => {
             print_tools_catalog();
@@ -243,12 +395,17 @@ fn print_tools_catalog() {
         { "name": "invoice_mark_paid", "description": "Mark an invoice as paid" },
         { "name": "invoice_flag_overdue", "description": "Flag invoice as overdue and emit penalty" },
         { "name": "ebinterface_export", "description": "Export Austrian ebInterface 6.1 compliant XML" },
+        { "name": "xrechnung_party", "description": "Store the seller or buyer party required by the XRechnung export" },
+        { "name": "xrechnung_export", "description": "Export a UBL invoice for XRechnung 3.0.2. Not a Peppol delivery." },
         { "name": "sepa_export", "description": "Export ISO 20022 pain.008 SEPA direct debit XML" },
         { "name": "subscription_create", "description": "Create recurring subscription" },
         { "name": "subscription_list", "description": "List active customer subscriptions" },
         { "name": "inbox_drain", "description": "Drain cross-app events from teamcraft/contractcraft" }
     ]);
-    println!("{}", serde_json::to_string_pretty(&catalog).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&catalog).unwrap_or_default()
+    );
 }
 
 fn run_mcp_server(service: BillService) -> Result<(), Box<dyn std::error::Error>> {
@@ -298,14 +455,21 @@ fn run_mcp_server(service: BillService) -> Result<(), Box<dyn std::error::Error>
                 stdout.flush()?;
             }
             "tools/call" => {
-                let tool_name = req.get("params").and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+                let tool_name = req
+                    .get("params")
+                    .and_then(|p| p.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
                 let result_json = match tool_name {
                     "bill_stats" => {
                         let st = service.store().stats().map_err(|e| e.to_string())?;
                         json!(st)
                     }
                     "invoice_list" => {
-                        let invs = service.store().list_invoices(None).map_err(|e| e.to_string())?;
+                        let invs = service
+                            .store()
+                            .list_invoices(None)
+                            .map_err(|e| e.to_string())?;
                         json!(invs)
                     }
                     _ => json!({ "status": "unknown tool" }),

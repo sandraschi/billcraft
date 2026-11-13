@@ -5,6 +5,12 @@ All notable changes to `billcraft` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-11-13
+
+### Changed
+- `export_xrechnung` writes the seller, buyer, payment account, tax breakdown, and lines required by XRechnung 3.0.2. The store test runs KoSIT Validator 1.6.3. The fixture was accepted. Missing party data is an error.
+- The window has File, Edit, View, Window, and Help. Help opens the five standard dialogs. `--smoke` checks the menu.
+
 ## [0.1.0] - 2026-11-10
 
 ### Added
