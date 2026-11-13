@@ -1142,6 +1142,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn test_invoice_creation_and_recalculation() {
         let store = BillStore::open_in_memory().unwrap();
         let inv = store
