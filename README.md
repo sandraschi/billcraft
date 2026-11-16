@@ -1,9 +1,23 @@
 # BillCraft 🧾
 
+## Screenshots, Demo Videos & Walkthroughs
+
+> **Under Construction:** Full `egui` screenshots, demo videos, and interactive walkthroughs are currently under construction.
+
 ![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
 ![Rust 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange?logo=rust)
 ![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple)
 ![ArtCraft harness](https://img.shields.io/badge/ArtCraft-harness-green)
+
+## Install
+
+Tell Cursor, Claude, Antigravity, or OpenCode: **Install this.**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-craft.ps1
+```
+
+Installs the Windows app, the CLI, and the MCP bundle.
 
 **Local-first sovereign invoicing, subscription recurring billing, and European e-invoicing engine.**
 
@@ -33,12 +47,24 @@ Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dep
 
 ```powershell
 # Run smoke tests
+
+## Screenshots, Demo Videos & Walkthroughs
+
+> **Under Construction:** Full `egui` screenshots, demo videos, and interactive walkthroughs are currently under construction.
 .\start.ps1 -Smoke
 
 # Launch native desktop app
+
+## Screenshots, Demo Videos & Walkthroughs
+
+> **Under Construction:** Full `egui` screenshots, demo videos, and interactive walkthroughs are currently under construction.
 .\start.ps1
 
 # Run MCP server on stdio
+
+## Screenshots, Demo Videos & Walkthroughs
+
+> **Under Construction:** Full `egui` screenshots, demo videos, and interactive walkthroughs are currently under construction.
 .\start.ps1 -Mcp
 ```
 
