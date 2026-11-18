@@ -108,6 +108,7 @@ struct BillApp {
     bar: Bar,
     dark: bool,
     zoom: f32,
+    lang_de: bool,
     draft_number: String,
     draft_name: String,
     draft_email: String,
@@ -167,6 +168,7 @@ impl BillApp {
             bar: Bar::new(),
             dark: true,
             zoom: 1.0,
+            lang_de: false,
             draft_number: String::new(),
             draft_name: String::new(),
             draft_email: String::new(),
@@ -222,10 +224,17 @@ impl BillApp {
             docs: &docs,
             dark: self.dark,
             zoom: self.zoom,
+            lang_de: self.lang_de,
             file: vec![
-                Item::action("Load Northwind demo", "app.demo"),
-                Item::action("Drain inbox", "app.drain"),
-                Item::action("Refresh", "app.refresh"),
+                Item::action(
+                    bookend::t(self.lang_de, "Northwind-Demo laden", "Load Northwind demo"),
+                    "app.demo",
+                ),
+                Item::action(
+                    bookend::t(self.lang_de, "Eingang abholen", "Drain inbox"),
+                    "app.drain",
+                ),
+                Item::action(bookend::t(self.lang_de, "Aktualisieren", "Refresh"), "app.refresh"),
             ],
             view: Vec::new(),
             middle: Vec::new(),
@@ -236,6 +245,9 @@ impl BillApp {
         }
         if let Some(zoom) = change.zoom {
             self.zoom = zoom;
+        }
+        if let Some(lang_de) = change.lang_de {
+            self.lang_de = lang_de;
         }
         match change.action.as_deref() {
             Some("app.refresh") => {
@@ -598,7 +610,7 @@ impl BillApp {
     }
 
     fn paint_create(&mut self, ui: &mut egui::Ui) {
-        ui.heading("New invoice");
+        ui.heading(bookend::t(self.lang_de, "Neue Rechnung", "New invoice"));
         ui.horizontal(|ui| {
             labeled(ui, "Number", &mut self.draft_number, 110.0);
             labeled(ui, "Customer", &mut self.draft_name, 160.0);
@@ -617,7 +629,7 @@ impl BillApp {
     }
 
     fn paint_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Invoices");
+        ui.heading(bookend::t(self.lang_de, "Rechnungen", "Invoices"));
         if self.invoices.is_empty() {
             ui.label("No invoices yet. Create one, or load the Northwind Traders demo.");
         }
@@ -656,7 +668,7 @@ impl BillApp {
 
     fn paint_detail(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.selected_invoice.clone() else {
-            ui.heading("Invoice");
+            ui.heading(bookend::t(self.lang_de, "Rechnung", "Invoice"));
             ui.label("Create an invoice on the left. Its lines and exports show up here.");
             return;
         };
@@ -839,13 +851,17 @@ impl eframe::App for BillApp {
             ui.heading(RichText::new("BillCraft").strong().color(accent));
             ui.separator();
             ui.label(
-                "Create an invoice, add lines, then export. Nothing is sent to a bank or Peppol.",
+                bookend::t(
+                    self.lang_de,
+                    "Rechnung anlegen, Zeilen hinzufügen, dann exportieren. Nichts geht an eine Bank oder an Peppol.",
+                    "Create an invoice, add lines, then export. Nothing is sent to a bank or Peppol.",
+                ),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if self.dark {
-                    "Light theme"
+                    bookend::t(self.lang_de, "Helles Thema", "Light theme")
                 } else {
-                    "Dark theme"
+                    bookend::t(self.lang_de, "Dunkles Thema", "Dark theme")
                 };
                 if ui.button(label).clicked() {
                     self.dark = !self.dark;
@@ -860,21 +876,21 @@ impl eframe::App for BillApp {
         ui.horizontal(|ui| {
             kpi(
                 ui,
-                "Invoiced",
+                bookend::t(self.lang_de, "Fakturiert", "Invoiced"),
                 self.stats.total_gross_cents,
                 tokens(self.dark).text,
             );
             ui.separator();
             kpi(
                 ui,
-                "Paid",
+                bookend::t(self.lang_de, "Bezahlt", "Paid"),
                 self.stats.paid_gross_cents,
                 Color32::from_rgb(46, 204, 113),
             );
             ui.separator();
             kpi(
                 ui,
-                "Overdue",
+                bookend::t(self.lang_de, "Überfällig", "Overdue"),
                 self.stats.overdue_gross_cents,
                 Color32::from_rgb(231, 76, 60),
             );
