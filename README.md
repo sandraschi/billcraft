@@ -9,6 +9,10 @@
 ![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple)
 ![ArtCraft harness](https://img.shields.io/badge/ArtCraft-harness-green)
 
+**Local-first sovereign invoicing, subscription recurring billing, and European e-invoicing engine.**
+
+Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dependency, instant, offline-capable Rust native applications.
+
 ## Install
 
 Tell Cursor, Claude, Antigravity, or OpenCode: **Install this.**
@@ -18,10 +22,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-craft.ps1
 ```
 
 Installs the Windows app, the CLI, and the MCP bundle.
-
-**Local-first sovereign invoicing, subscription recurring billing, and European e-invoicing engine.**
-
-Part of the Sovereign Back-Office Suite replacing SaaS spend with zero-cloud-dependency, instant, offline-capable Rust native applications.
 
 ## Features
 
